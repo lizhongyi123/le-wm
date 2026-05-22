@@ -1,0 +1,4 @@
+[2026-05-22 18:04:42,213][root][INFO] - Cached 'action' from 'C:\Users\wangh\Desktop\world_model\lewd2\train_data\pusht_expert_train.h5'
+[2026-05-22 18:04:42,610][root][INFO] - Cached 'proprio' from 'C:\Users\wangh\Desktop\world_model\lewd2\train_data\pusht_expert_train.h5'
+[2026-05-22 18:04:43,054][root][INFO] - Cached 'state' from 'C:\Users\wangh\Desktop\world_model\lewd2\train_data\pusht_expert_train.h5'
+[2026-05-22 18:04:43,437][root][INFO] - Created ViT-tiny from scratch with config: {'hidden_size': 192, 'num_hidden_layers': 12, 'num_attention_heads': 3, 'intermediate_size': 768, 'image_size': 224, 'patch_size': 14}

@@ -25,7 +25,7 @@ def img_transform(cfg):
     )
     return transform
 
-
+#用于计算每条轨迹 episode 有多长。
 def get_episodes_length(dataset, episodes):
     col_name = "episode_idx" if "episode_idx" in dataset.column_names else "ep_idx"
 
@@ -36,7 +36,7 @@ def get_episodes_length(dataset, episodes):
         lengths.append(np.max(step_idx[episode_idx == ep_id]) + 1)
     return np.array(lengths)
 
-
+#加载 HDF5 数据集
 def get_dataset(cfg, dataset_name):
     dataset_path = Path(cfg.cache_dir or swm.data.utils.get_cache_dir())
     dataset = swm.data.HDF5Dataset(
@@ -68,6 +68,7 @@ def run(cfg: DictConfig):
     col_name = "episode_idx" if "episode_idx" in dataset.column_names else "ep_idx"
     ep_indices, _ = np.unique(stats_dataset.get_col_data(col_name), return_index=True)
 
+    #给非图像字段做标准化
     process = {}
     for col in cfg.dataset.keys_to_cache:
         if col in ["pixels"]:
@@ -99,6 +100,7 @@ def run(cfg: DictConfig):
     else:
         policy = swm.policy.RandomPolicy()
 
+    #如果是random policy，则保存到当前脚本目录附近
     results_path = (
         Path(swm.data.utils.get_cache_dir(), cfg.policy).parent
         if cfg.policy != "random"
@@ -114,7 +116,7 @@ def run(cfg: DictConfig):
     max_start_per_row = np.array(
         [max_start_idx_dict[ep_id] for ep_id in dataset.get_col_data(col_name)]
     )
-
+    #筛选所有合法起点。
     # remove all the lines of dataset for which dataset['step_idx'] > max_start_per_row
     valid_mask = dataset.get_col_data("step_idx") <= max_start_per_row
     valid_indices = np.nonzero(valid_mask)[0]
@@ -124,12 +126,13 @@ def run(cfg: DictConfig):
     random_episode_indices = g.choice(
         len(valid_indices) - 1, size=cfg.eval.num_eval, replace=False
     )
-
+    #随机抽取cfg.eval.num_eval个起点进行评估。
     # sort increasingly to avoid issues with HDF5Dataset indexing
     random_episode_indices = np.sort(valid_indices[random_episode_indices])
 
     print(random_episode_indices)
 
+    #得到评估用的episode编号和起始步数。
     eval_episodes = dataset.get_row_data(random_episode_indices)[col_name]
     eval_start_idx = dataset.get_row_data(random_episode_indices)["step_idx"]
 

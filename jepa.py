@@ -37,7 +37,7 @@ class JEPA(nn.Module):
         output = self.encoder(pixels, interpolate_pos_encoding=True)
         pixels_emb = output.last_hidden_state[:, 0]  # cls token
         emb = self.projector(pixels_emb)
-        info["emb"] = rearrange(emb, "(b t) d -> b t d", b=b)
+        info["emb"] = rearrange(emb, "(b t) d -> b t d", b=b)  #d 192
 
         if "action" in info:
             info["act_emb"] = self.action_encoder(info["action"])
@@ -75,6 +75,7 @@ class JEPA(nn.Module):
 
         # copy and encode initial info dict
         _init = {k: v[:, 0] for k, v in info.items() if torch.is_tensor(v)}
+        #把初始历史图像和动作编码成embedding
         _init = self.encode(_init)
         emb = info["emb"] = _init["emb"].unsqueeze(1).expand(B, S, -1, -1)
         _init = {k: detach_clone(v) for k, v in _init.items()}

@@ -4,8 +4,7 @@ from pathlib import Path
 
 import hydra
 import lightning as pl
-import stable_pretraining as spt
-import stable_worldmodel as swm
+
 import torch
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import OmegaConf, open_dict
@@ -13,7 +12,14 @@ from omegaconf import OmegaConf, open_dict
 from jepa import JEPA
 from module import ARPredictor, Embedder, MLP, SIGReg
 from utils import get_column_normalizer, get_img_preprocessor, ModelObjectCallBack
+from plain_trainer import PlainLeWMTrainer
+from my_swm import HDF5Dataset
+from my_spt import Compose, ToImage, Resize, random_split, vit_hf
+import my_spt as spt
+import my_swm as swm
 
+from datetime import datetime
+from pathlib import Path
 
 def lejepa_forward(self, batch, stage, cfg):
     """encode observations, predict next states, compute losses."""
@@ -50,8 +56,15 @@ def run(cfg):
     #########################
     ##       dataset       ##
     #########################
+    # cfg.data.dataset.num_steps = 4
+    # cfg.data.dataset.frameskip = 5  #跳过多少步
+    # cfg.data.dataset.name = "pusht_expert_train"
+    # cfg.data.dataset.keys_to_load = ["pixels", "action", "proprio", "state"]
+    # cfg.data.dataset.keys_to_cache = ["action", "proprio", "state"]
 
-    dataset = swm.data.HDF5Dataset(**cfg.data.dataset, transform=None)
+
+    h5_path = r"C:\Users\wangh\Desktop\world_model\lewd2\train_data"
+    dataset = HDF5Dataset(**cfg.data.dataset, transform=None, h5_data_path=h5_path)
     transforms = [get_img_preprocessor(source='pixels', target='pixels', img_size=cfg.img_size)]
     
     with open_dict(cfg):
@@ -64,11 +77,11 @@ def run(cfg):
 
             setattr(cfg.wm, f"{col}_dim", dataset.get_dim(col))
 
-    transform = spt.data.transforms.Compose(*transforms)
+    transform = Compose(*transforms)
     dataset.transform = transform
 
     rnd_gen = torch.Generator().manual_seed(cfg.seed)
-    train_set, val_set = spt.data.random_split(
+    train_set, val_set = random_split(
         dataset, lengths=[cfg.train_split, 1 - cfg.train_split], generator=rnd_gen
     )
 
@@ -79,7 +92,7 @@ def run(cfg):
     ##       model / optim      ##
     ##############################
 
-    encoder = spt.backbone.utils.vit_hf(
+    encoder = vit_hf(
         cfg.encoder_scale,
         patch_size=cfg.patch_size,
         image_size=cfg.img_size,
@@ -123,59 +136,36 @@ def run(cfg):
         pred_proj=predictor_proj,
     )
 
-    optimizers = {
-        'model_opt': {
-            "modules": 'model',
-            "optimizer": dict(cfg.optimizer),
-            "scheduler": {"type": "LinearWarmupCosineAnnealingLR"},
-            "interval": "epoch",
-        },
-    }
 
-    data_module = spt.data.DataModule(train=train, val=val)
-    world_model = spt.Module(
-        model = world_model,
-        sigreg = SIGReg(**cfg.loss.sigreg.kwargs),
-        forward=partial(lejepa_forward, cfg=cfg),
-        optim=optimizers,
-    )
+    base_run_dir = Path("C:/Users/wangh/Desktop/world_model/lewd2/cache")
 
-    ##########################
-    ##       training       ##
-    ##########################
+    run_id = cfg.get("subdir") or datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    run_id = cfg.get("subdir") or ""
-    run_dir = Path(swm.data.utils.get_cache_dir(), run_id)
+    run_dir = base_run_dir / run_id
 
-    logger = None
-    if cfg.wandb.enabled:
-        logger = WandbLogger(**cfg.wandb.config)
-        logger.log_hyperparams(OmegaConf.to_container(cfg))
 
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "config.yaml", "w") as f:
         OmegaConf.save(cfg, f)
 
-    object_dump_callback = ModelObjectCallBack(
-        dirpath=run_dir, filename=cfg.output_model_name, epoch_interval=1,
+    sigreg = SIGReg(**cfg.loss.sigreg.kwargs)
+
+    plain_trainer = PlainLeWMTrainer(
+        model=world_model,
+        sigreg=sigreg,
+        train_loader=train,
+        val_loader=val,
+        cfg=cfg,
+        run_dir=run_dir,
+        output_model_name=cfg.output_model_name,
     )
 
-    trainer = pl.Trainer(
-        **cfg.trainer,
-        callbacks=[object_dump_callback],
-        num_sanity_val_steps=1,
-        logger=logger,
-        enable_checkpointing=True,
-    )
+    resume_path = cfg.get("resume_from", None)
+    if resume_path is not None and str(resume_path).lower() not in ["", "none", "null"]:
+        plain_trainer.load_checkpoint(resume_path)
 
-    manager = spt.Manager(
-        trainer=trainer,
-        module=world_model,
-        data=data_module,
-        ckpt_path=run_dir / f"{cfg.output_model_name}_weights.ckpt",
-    )
+    plain_trainer.fit()
 
-    manager()
     return
 
 
