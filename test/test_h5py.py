@@ -1,19 +1,29 @@
 import h5py
 import hdf5plugin
-h5_path = r"F:\save\word_model\lewd2\train_data\pusht_expert_train.h5"
+h5_path = r"C:\Users\wangh\Desktop\world_model\lewd2\train_data\pusht_expert_train.h5"
 
 with h5py.File(h5_path, "r") as f:
     print("keys:", list(f.keys()))
 
     d = f["pixels"]
     print("pixels shape:", d.shape)
-    print("pixels dtype:", d.dtype)
-    print("pixels chunks:", d.chunks)
-    print("pixels compression:", d.compression)
-    print("pixels external:", d.external)
+    # print(d[1])
 
-    x = d[0:20]
-    print("read pixels[0:20] ok:", x.shape, x.dtype)
+    print("  " * 100)
 
-    x = d[1868112:1868132]
-    print("read failed-index slice ok:", x.shape, x.dtype)
+    d = f["action"]
+    print("action shape:", d.shape)
+    print(d[5: 10])
+    
+    print("  " * 100)
+
+    d = f["ep_len"]
+    print("ep_len shape:", d.shape)
+    print(d[: 7])
+
+    print("  " * 100)
+
+    d = f["ep_offset"]
+    print("ep_offset shape:", d.shape)
+    print(d[:7])
+

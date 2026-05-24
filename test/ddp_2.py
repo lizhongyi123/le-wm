@@ -443,7 +443,7 @@ def main(cfg):
         CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6 torchrun --nproc_per_node=7 decoder_train_ddp.py
     """
     distributed, rank, world_size, local_rank = setup_distributed()
-    distributed = None
+
     try:
         if distributed:
             device = torch.device(f"cuda:{local_rank}")
@@ -471,15 +471,31 @@ def main(cfg):
             print(f"resume_from   = {path_cfg['resume_from']}")
 
         # --------------------------------------------------------
-
-
-        train_loader, val_loader, train_sampler = load_train_val(
+        # 1. Dataset
+        # --------------------------------------------------------
+        train_loader, val_loader = load_train_val(
             cfg,
             path_cfg["h5_path"],
-            distributed=distributed,
-            rank=rank,
-            world_size=world_size,
         )
+
+        if distributed:
+            train_sampler = DistributedSampler(
+                train_loader.dataset,
+                num_replicas=world_size,
+                rank=rank,
+                shuffle=True,
+                drop_last=True,
+            )
+
+            train_loader = DataLoader(
+                train_loader.dataset,
+                batch_size=train_loader.batch_size,
+                sampler=train_sampler,
+                num_workers=getattr(train_loader, "num_workers", 0),
+                pin_memory=True,
+                drop_last=True,
+                persistent_workers=getattr(train_loader, "num_workers", 0) > 0,
+            )
 
         if is_main_process():
             print("Dataset loaded by utils1.load_dataset.load_train_val(cfg)")
@@ -605,3 +621,147 @@ def main(cfg):
 
 if __name__ == "__main__":
     main()
+###########################
+import torch
+from omegaconf import open_dict
+from torch.utils.data.distributed import DistributedSampler
+
+from my_swm import HDF5Dataset
+from my_spt import Compose, random_split
+from utils import get_img_preprocessor, get_column_normalizer
+
+
+def load_train_val(
+    cfg,
+    h5_path,
+    distributed=False,
+    rank=0,
+    world_size=1,
+):
+    """
+    构建 train_loader 和 val_loader。
+
+    参数:
+        cfg:
+            Hydra / OmegaConf 配置
+        h5_path:
+            HDF5 数据路径
+        distributed:
+            是否使用 DDP
+        rank:
+            当前进程 rank
+        world_size:
+            总进程数
+
+    返回:
+        train_loader, val_loader, train_sampler
+    """
+
+    # ============================================================
+    # 1. Dataset
+    # ============================================================
+    dataset = HDF5Dataset(
+        **cfg.data.dataset,
+        transform=None,
+        h5_data_path=h5_path,
+    )
+
+    transforms = [
+        get_img_preprocessor(
+            source="pixels",
+            target="pixels",
+            img_size=cfg.img_size,
+        )
+    ]
+
+    with open_dict(cfg):
+        for col in cfg.data.dataset.keys_to_load:
+            if col.startswith("pixels"):
+                continue
+
+            normalizer = get_column_normalizer(dataset, col, col)
+            transforms.append(normalizer)
+
+            setattr(cfg.wm, f"{col}_dim", dataset.get_dim(col))
+
+    transform = Compose(*transforms)
+    dataset.transform = transform
+
+    # ============================================================
+    # 2. Train / val split
+    # ============================================================
+    rnd_gen = torch.Generator().manual_seed(cfg.seed)
+
+    train_set, val_set = random_split(
+        dataset,
+        lengths=[cfg.train_split, 1 - cfg.train_split],
+        generator=rnd_gen,
+    )
+
+    # ============================================================
+    # 3. DataLoader settings
+    # ============================================================
+    loader_kwargs = dict(cfg.loader)
+
+    # 防止 cfg.loader 里已有 shuffle，后面重复传参
+    loader_kwargs.pop("shuffle", None)
+
+    # 防止 cfg.loader 里已有 drop_last，后面重复传参
+    loader_kwargs.pop("drop_last", None)
+
+    # 防止 cfg.loader 里已有 generator，后面重复传参
+    loader_kwargs.pop("generator", None)
+
+    # ============================================================
+    # 4. Distributed sampler
+    # ============================================================
+    if distributed:
+        #train_sampler是“索引分配器,告诉当前进程：你应该读取哪些数据索引
+        train_sampler = DistributedSampler(
+            train_set,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True, #表示每个 epoch 重新打乱数据后再切分。
+            drop_last=True,  #表示如果数据集不能被 world_size 整除，就丢掉最后少量样本，让每个 rank 拿到相同数量的数据。
+        )
+
+        train_loader = torch.utils.data.DataLoader(
+            train_set,
+            **loader_kwargs,
+            sampler=train_sampler, #DataLoader 不再自己决定怎么取数据，而是听 DistributedSampler 的。
+            shuffle=False,
+            drop_last=True, #保证每个 rank 内部最后一个 batch 是完整 batch
+        )
+
+    else:
+        train_sampler = None
+
+        train_loader = torch.utils.data.DataLoader(
+            train_set,
+            **loader_kwargs,
+            shuffle=True,
+            drop_last=True,
+            generator=rnd_gen,
+        )
+
+    # ============================================================
+    # 5. Validation loader
+    # ============================================================
+    # val 一般不需要 DistributedSampler。
+    # 如果只是训练 decoder，通常只用 train_loader 即可。
+    val_loader = torch.utils.data.DataLoader(
+        val_set,
+        **loader_kwargs,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    return train_loader, val_loader, train_sampler
+
+train_loader, val_loader, train_sampler = load_train_val(
+    cfg,
+    path_cfg["h5_path"],
+    distributed=distributed,
+    rank=rank,
+    world_size=world_size,
+)

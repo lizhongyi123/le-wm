@@ -26,10 +26,17 @@ trainer:
 
 loader:
   batch_size: 128
-  num_workers: ${num_workers}
-  persistent_workers: True
-  prefetch_factor: 3
-  pin_memory: True
+  num_workers: 0
+  persistent_workers: false
+  prefetch_factor: null
+  pin_memory: false
+
+#loader:
+#  batch_size: 128
+#  num_workers: ${num_workers}
+#  persistent_workers: True
+#  prefetch_factor: 3
+#  pin_memory: True
 
 optimizer:
   type: AdamW

@@ -59,7 +59,6 @@ class Dataset:
             if length >= self.span
             for start in range(length - self.span + 1)
         ]
-
     @property
     def column_names(self) -> list[str]:
         raise NotImplementedError
@@ -185,30 +184,7 @@ class HDF5Dataset(Dataset):
             self.offsets[ep_idx] + end,
         )
         steps = {}
-        # for col in self._keys:
-        #     src = self._cache if col in self._cache else self.h5_file
-        #     try:
-        #         print(
-        #             f"[PID {os.getpid()}] ep_idx={ep_idx}, start={start}, end={end}, "
-        #             f"g_start={g_start}, g_end={g_end}, col={col}, "
-        #             f"cached={col in self._cache}",
-        #             flush=True
-        #         )
-        #         data = src[col][g_start:g_end]
-        #     except Exception as e:
-        #         print("=" * 80, flush=True)
-        #         print(f"[PID {os.getpid()}] HDF5 read failed", flush=True)
-        #         print(f"col      = {col}", flush=True)
-        #         print(f"ep_idx   = {ep_idx}", flush=True)
-        #         print(f"start    = {start}", flush=True)
-        #         print(f"end      = {end}", flush=True)
-        #         print(f"g_start  = {g_start}", flush=True)
-        #         print(f"g_end    = {g_end}", flush=True)
-        #         print(f"h5_path  = {self.h5_path}", flush=True)
-        #         print(f"cached   = {col in self._cache}", flush=True)
-        #         traceback.print_exc()
-        #         print("=" * 80, flush=True)
-        #         raise
+
 
         for col in self._keys:
             #判断从缓存读还是从h5文件读
