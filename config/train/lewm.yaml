@@ -18,7 +18,7 @@ encoder_scale: tiny
 dump_object: True
 
 trainer:
-  max_epochs: 10
+  max_epochs: 12
   devices: auto
   accelerator: gpu
   precision: bf16

@@ -444,6 +444,9 @@ def main(cfg):
     """
     distributed, rank, world_size, local_rank = setup_distributed()
     distributed = None
+
+    lewm_ckpt = r"C:\Users\wangh\Desktop\world_model\le-wm\cache\20260522_180443\lewm_best.ckpt"
+
     try:
         if distributed:
             device = torch.device(f"cuda:{local_rank}")
@@ -453,7 +456,6 @@ def main(cfg):
         # 你原代码里有一个单独写死的 lewm_ckpt，这里保留你的逻辑
         # 如果你希望完全从 decoder_cfg 读取，可以把下面这一行改成:
         # lewm_ckpt = decoder_cfg["paths"]["lewm_ckpt_path"]
-        lewm_ckpt = r"C:\Users\wangh\Desktop\world_model\le-wm\cache\20260522_180443\lewm_best.ckpt"
 
         path_cfg = decoder_cfg["paths"]
         model_cfg = decoder_cfg["model"]
@@ -473,7 +475,7 @@ def main(cfg):
         # --------------------------------------------------------
 
 
-        train_loader, val_loader, train_sampler = load_train_val(
+        train_loader, val_loader, _, _= load_train_val(
             cfg,
             path_cfg["h5_path"],
             distributed=distributed,

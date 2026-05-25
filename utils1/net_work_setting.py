@@ -13,9 +13,8 @@ decoder_cfg = {
     # Checkpoint / path settings
     # ============================================================
     "paths": {
-        "lewm_ckpt_path": r"C:\Users\wangh\Desktop\world_model\lewd2\cache\20260522_180443\lewm_best.ckpt",
-        "h5_path": r"C:\Users\wangh\Desktop\world_model\le-wm\train_data",
-        "save_base_dir": r"C:\Users\wangh\Desktop\world_model\le-wm\decoder\cache",
+        "h5_path": h5_path,
+        "save_base_dir": save_base_dir,
         "output_name": "visualization_decoder",
         "resume_from": r"C:\Users\wangh\Desktop\world_model\le-wm\decoder\cache\20260524_121226\visualization_decoder_best.pt",
         # "resume_from": r"C:\Users\wangh\Desktop\world_model\le-wm\decoder_ckpts\visualization_decoder_last.pt",

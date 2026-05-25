@@ -21,125 +21,164 @@ import my_swm as swm
 from datetime import datetime
 from pathlib import Path
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.distributed as dist
+from utils1.load_worldmodel import build_world_model, load_wm_checkpoint
+from utils1.load_dataset import load_train_val
+
+def setup_distributed():
+    """
+    单卡 python 运行:
+        distributed=False
+
+    多卡 torchrun 运行:
+        torchrun 会自动设置:
+            RANK
+            WORLD_SIZE
+            LOCAL_RANK
+    """
+    if "RANK" not in os.environ:
+        return False, 0, 1, 0
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend=backend)
+
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+
+    return True, rank, world_size, local_rank
+
+
+def cleanup_distributed():
+    if dist.is_available() and dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def is_main_process():
+    return (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
 
 
 @hydra.main(version_base=None, config_path="./config/train", config_name="lewm")
 def run(cfg):
-    #########################
-    ##       dataset       ##
-    #########################
-    # cfg.data.dataset.num_steps = 4
-    # cfg.data.dataset.frameskip = 5  #跳过多少步
-    # cfg.data.dataset.name = "pusht_expert_train"
-    # cfg.data.dataset.keys_to_load = ["pixels", "action", "proprio", "state"]
-    # cfg.data.dataset.keys_to_cache = ["action", "proprio", "state"]
+    distributed, rank, world_size, local_rank = setup_distributed()
+    distributed = None
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+
+    base_run_dir = os.path.join(script_directory, "cache")
+    resume_path =os.path.join(script_directory, "cache", 20260522_180443, "lewm_best.ckpt")
+
+    try:
+        if distributed:
+            device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+        else:
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        h5_path = r"C:\Users\wangh\Desktop\world_model\le-wm\train_data"
+
+        if is_main_process():
+            print("========== Train LeWM ==========")
+            print(f"distributed = {distributed}")
+            print(f"rank        = {rank}")
+            print(f"world_size  = {world_size}")
+            print(f"local_rank  = {local_rank}")
+            print(f"device      = {device}")
+            print(f"h5_path     = {h5_path}")
+
+        # --------------------------------------------------------
+        # 1. Dataset
+        # --------------------------------------------------------
+        train_loader, val_loader, train_sampler, val_sampler = load_train_val(
+            cfg=cfg,
+            h5_path=h5_path,
+            distributed=distributed,
+            rank=rank,
+            world_size=world_size,
+        )
+
+        if is_main_process():
+            print(f"train_loader batches = {len(train_loader)}")
+            print(f"val_loader batches   = {len(val_loader)}")
+
+        # --------------------------------------------------------
+        # 2. Build model
+        # --------------------------------------------------------
+        world_model = build_world_model(cfg).to(device)
+
+        sigreg = SIGReg(**cfg.loss.sigreg.kwargs).to(device)
+
+        # --------------------------------------------------------
+        # 3. DDP wrap
+        # --------------------------------------------------------
+        if distributed:
+            world_model = DDP(
+                world_model,
+                device_ids=[local_rank] if torch.cuda.is_available() else None,
+                output_device=local_rank if torch.cuda.is_available() else None,
+                find_unused_parameters=False,
+            )
+
+        # --------------------------------------------------------
+        # 4. Run directory
+        # --------------------------------------------------------
 
 
-    h5_path = r"C:\Users\wangh\Desktop\world_model\lewd2\train_data"
-    dataset = HDF5Dataset(**cfg.data.dataset, transform=None, h5_data_path=h5_path)
-    transforms = [get_img_preprocessor(source='pixels', target='pixels', img_size=cfg.img_size)]
-    
-    with open_dict(cfg):
-        for col in cfg.data.dataset.keys_to_load:
-            if col.startswith("pixels"):
-                continue
+        if distributed:
+            if rank == 0:
+                run_id_obj = [cfg.get("subdir") or datetime.now().strftime("%Y%m%d_%H%M%S")]
+            else:
+                run_id_obj = [None]
 
-            normalizer = get_column_normalizer(dataset, col, col)
-            transforms.append(normalizer)
+            dist.broadcast_object_list(run_id_obj, src=0)
+            run_id = run_id_obj[0]
+        else:
+            run_id = cfg.get("subdir") or datetime.now().strftime("%Y%m%d_%H%M%S")
 
-            setattr(cfg.wm, f"{col}_dim", dataset.get_dim(col))
+        run_dir = base_run_dir / run_id
 
-    transform = Compose(*transforms)
-    dataset.transform = transform
+        if is_main_process():
+            run_dir.mkdir(parents=True, exist_ok=True)
+            with open(run_dir / "config.yaml", "w", encoding="utf-8") as f:
+                OmegaConf.save(cfg, f)
 
-    rnd_gen = torch.Generator().manual_seed(cfg.seed)
-    train_set, val_set = random_split(
-        dataset, lengths=[cfg.train_split, 1 - cfg.train_split], generator=rnd_gen
-    )
+            print(f"run_dir = {run_dir}")
 
-    train = torch.utils.data.DataLoader(train_set, **cfg.loader,shuffle=True, drop_last=True, generator=rnd_gen)
-    val = torch.utils.data.DataLoader(val_set, **cfg.loader, shuffle=False, drop_last=False)
-    
-    ##############################
-    ##       model / optim      ##
-    ##############################
+        if distributed:
+            dist.barrier()
 
-    encoder = vit_hf(
-        cfg.encoder_scale,
-        patch_size=cfg.patch_size,
-        image_size=cfg.img_size,
-        pretrained=False,
-        use_mask_token=False,
-    )
+        # --------------------------------------------------------
+        # 5. Trainer
+        # --------------------------------------------------------
+        plain_trainer = PlainLeWMTrainer(
+            model=world_model,
+            sigreg=sigreg,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            train_sampler=train_sampler,
+            val_sampler=val_sampler,
+            cfg=cfg,
+            run_dir=run_dir,
+            output_model_name=cfg.output_model_name,
+            device=device,
+            distributed=distributed,
+            rank=rank,
+            world_size=world_size,
+        )
 
-    hidden_dim = encoder.config.hidden_size
-    embed_dim = cfg.wm.get("embed_dim", hidden_dim)
-    effective_act_dim = cfg.data.dataset.frameskip * cfg.wm.action_dim
+        # 是否重新训练
+      # resume_path = r"C:\Users\wangh\Desktop\world_model\le-wm\cache\xxxx\lewm_last.ckpt"
 
-    predictor = ARPredictor(
-        num_frames=cfg.wm.history_size,
-        input_dim=embed_dim,
-        hidden_dim=hidden_dim,
-        output_dim=hidden_dim,
-        **cfg.predictor,
-    )
+        if resume_path is not None:
+            plain_trainer.load_checkpoint(resume_path)
 
-    action_encoder = Embedder(input_dim=effective_act_dim, emb_dim=embed_dim)
-    
-    projector = MLP(
-        input_dim=hidden_dim,
-        output_dim=embed_dim,
-        hidden_dim=2048,
-        norm_fn=torch.nn.BatchNorm1d,
-    )
+        plain_trainer.fit()
 
-    predictor_proj = MLP(
-        input_dim=hidden_dim,
-        output_dim=embed_dim,
-        hidden_dim=2048,
-        norm_fn=torch.nn.BatchNorm1d,
-    )
-
-    world_model = JEPA(
-        encoder=encoder,
-        predictor=predictor,
-        action_encoder=action_encoder,
-        projector=projector,
-        pred_proj=predictor_proj,
-    )
-
-
-    base_run_dir = Path("C:/Users/wangh/Desktop/world_model/le-wm/cache")
-
-    run_id = cfg.get("subdir") or datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    run_dir = base_run_dir / run_id
-
-
-    run_dir.mkdir(parents=True, exist_ok=True)
-    with open(run_dir / "config.yaml", "w") as f:
-        OmegaConf.save(cfg, f)
-
-    sigreg = SIGReg(**cfg.loss.sigreg.kwargs)
-
-    plain_trainer = PlainLeWMTrainer(
-        model=world_model,
-        sigreg=sigreg,
-        train_loader=train,
-        val_loader=val,
-        cfg=cfg,
-        run_dir=run_dir,
-        output_model_name=cfg.output_model_name,
-    )
-    #是否重新训练
-    resume_path = None
-
-    if resume_path is not None:
-        plain_trainer.load_checkpoint(resume_path)
-
-    plain_trainer.fit()
-
-    return
+    finally:
+        cleanup_distributed()
 
 
 if __name__ == "__main__":

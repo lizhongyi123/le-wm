@@ -17,7 +17,7 @@ from utils1.net_work_setting import  decoder_cfg
 
 CKPT_PATH = r"C:\Users\wangh\Desktop\world_model\le-wm\cache\20260522_180443\lewm_best.ckpt"
 
-DECODER_CKPT_PATH = r"C:\Users\wangh\Desktop\world_model\le-wm\decoder\cache\20260523_234916\visualization_decoder_best.pt"
+DECODER_CKPT_PATH = r"C:\Users\wangh\Desktop\world_model\le-wm\decoder\cache\20260524_191438\visualization_decoder_best.pt"
 
 H5_PATH = r"C:\Users\wangh\Desktop\world_model\le-wm\train_data"
 
@@ -363,7 +363,7 @@ def run(cfg):
     cfg.data.dataset.num_steps = 20
     cfg.data.dataset.frameskip = 5
 
-    train, val = load_train_val(cfg, H5_PATH)
+    train, val,_,_ = load_train_val(cfg, H5_PATH)
 
     print(f"train batches = {len(train)}")
     print(f"val batches   = {len(val)}")
